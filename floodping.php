@@ -1,326 +1,65 @@
 <?php
-#  umka@localka.net
+#  umka@localka.net  skype: pashaumka
 #
-#  floodping.class.php version 0.1 beta
-#  script working with ipv4 and with ipv6 addresses
+#  floodping.class.php version 0.2 beta
+#  скрипт работает как с ipv4, так и с ipv6 адресами
 #
-#  this script required root permissions, Run php5-fpm with root rights
-#  user=root, group=root and potions with start  --allow-to-run-as-root
-#  or more graceful
+#  для запуска скрипта необходимо запустить php5-fpm с правами root
+#  user=root, group=root и опцией при запуске --allow-to-run-as-root
+#  ну или более красиво
 #
-#  if u found bugs or mistakes - send me on umka@localka.net
+#  за баги и ляпы не пинать, а высылать исправления на umka@localka.net
 #
 #  echo "<img src='http://our.host.addr/ping.class.php?host=".$framedip."'>";
-#  if need &pktlen=1472
+#  кому надо &pktlen=1472
 #
-#  todo
-#  * check ttl 
+#  надо допилить
+#  * парсинг адресов (в4 и в6) и обработку try_catch
+#  * вывод сообщений на русском
+#  * rtt
+#  * учет ttl - мы же не собираемся мир ддосить.. а только хосты абонов внутри сети.
+#
+#  в скрипте нет блокировки на диапазоны "не своих" IP адресов, это в плане допила
 #
 /*
-    my config nginx  /путь/к/скрипту/billing_tools/
+        скрипт  кладем в /путь/к/скрипту/billing_tools/
 
-    in nginx:
+    в nginx:
 
-        #working php with root access
+        #Работа с php с правами рута
         location /billing_tools {
-                root /path/to/script/;
+                root /путь/к/скрипту/;
                 index index.php index.html index.htm;
                 location ~ ^/billing_tools/(.+\.php)$ {
                         #try_files      $uri =404;
                         root            /путь/к/скрипту/;
                         #fastcgi_pass   php-fpm;
-                        fastcgi_pass    127.0.0.1:9099;
+                        fastcgi_pass    127.0.0.1:9032;
                         fastcgi_index   index.php;
                         fastcgi_param   SCRIPT_FILENAME $request_filename;
                         include         /etc/nginx/fastcgi_params;
                 }
                 location ~* ^/billing_tools/(.+\.(jpg|jpeg|gif|css|png|js|ico|html|xml|txt))$ {
-                        root /path/to/script/with/images/;
+                        root /путь/к/картинкам/images/;
                 }
 
-            access_log  /path/to/logs/access.log main;
-            error_log   /path/to/logs/error.log warn;
+            access_log  /путь/к/логам/webtools/logs/access.log main;
+            error_log   /путь/к/логам/webtools/logs/error.log warn;
         }
 
-
-    in php-fpm in pool create pool with root access
+    в php-fpm в пуле создаем пул с правами рута
         user=root
         group=root
-        listen=127.0.0.1:9099;   // for example
+        listen=127.0.0.1:9032;   // к примеру
 */
 
-//include("/stat/web/Global_settings.php");
-
-class Net_Ping {
-	var $icmp_socket;
-	var $request;
-	var $request_len;
-	var $ping_count;
-	var $stats_array;
-	var $reply;
-	var $errstr;
-	var $time;
-	var $timer_start_time;
-	var $packet_data;
-	var $ping_result=array();
-	var $ttl = -1;
-	var $timeout = 1;
-	var $srcv4="10.22.0.1";
-	var $srcv6="fc80::1/64";
-	var $src_addr;
-	var $ip_calc;
-	var $config;
-
-	function Net_Ping() {
-	}
-
-	function ip_checksum($data) {
-	    if (strlen($data)%2)
-		$data .= "\x00";
-	    $bit = unpack('n*', $data);
-	    $sum = array_sum($bit);
-	    while ($sum >> 16)
-		$sum = ($sum >> 16) + ($sum & 0xffff);
-	    return pack('n*', ~$sum);
-	}
-
-	function start_time() {
-	    $this->timer_start_time = microtime();
-	}
-
-	function get_time($acc=2) {
-	    $end_time = explode (" ", microtime());
-	    // format start time
-	    $start_time = explode (" ", $this->timer_start_time);
-	    $start_time = $start_time[1] + $start_time[0];
-	    // get and format end time
-	    $end_time = $end_time[1] + $end_time[0];
-	    return number_format ($end_time - $start_time, $acc);
-	}
-
-	function Build_Packet($seq_no,$ip_protocol="ipv4") {
-	    $type = "\x08"; // 8 echo message; 0 echo reply message
-	    if($ip_protocol=="ipv6") {
-		$type = "\x80"; // 128 echo message for ipv6
-	    }
-	    $code = "\x00"; // always 0 for this program
-	    $chksm = "\x00\x00"; // generate checksum for icmp request
-	    $id = "\x00\x00"; // we will have to work with this later
-	    $id  = chr(rand(0,255)) . chr(rand(0,255));
-	    $sqn =  chr(floor($seq_no/256)%256) . chr($seq_no%256);
-	    // now we need to change the checksum to the real checksum
-	    $chksm = $this->ip_checksum($type.$code.$chksm.$id.$sqn.$this->packet_data);
-	    // now lets build the actual icmp packet
-	    $this->request = $type.$code.$chksm.$id.$sqn.$this->packet_data;
-	    $this->request_len = strlen($this->request);
-	}
+include("/stat/web/Global_settings.php");
 
 
-	//http://php.net/manual/ru/function.socket-create.php
-	//https://github.com/clue/php-socket-raw
-	function ping($count_pings="1000",$dst_addr,$timeout="1000",$percision="7",$packet_size="1472") {
-
-	    $strings=new strings;
-	    $ip_ttl_code = 7;
-	    
-	    $false_timeout="20";
-	    if($count_pings<="3") {
-		$false_timeout=$count_pings;
-	    }
-
-	    if (ereg('/',$dst_addr)){  //if cidr type mask
-		return(array("status"=>"error",
-		    "msg"=>"Only ip host/device. Not subnet :)"));
-	    }
-
-	    if($strings->is_ipv4($dst_addr)) {
-		$ip_protocol_code = getprotobyname("icmp");
-	        $ip_protocol="ipv4";
-		if( ($this->icmp_socket = @socket_create(AF_INET, SOCK_RAW, $ip_protocol_code))===false ) {
-			return(array("status"=>"error",
-				    "msg"=>"can't create AF_INET RAW socket.\n Root permissions requred."));
-		}
-		if($this->srcv4 != "") {
-		    socket_bind($this->icmp_socket,$this->srcv4);
-		    $this->src_addr=$this->srcv4;
-		}
-
-		socket_set_nonblock($this->icmp_socket);
-	    } elseif($strings->is_ipv6($dst_addr)) {
-		/// http://php.net/manual/ru/function.socket-create.php#120174
-		$ip_protocol_code = 58; //getprotobyname("ipv6-icmp");
-		$ip_protocol="ipv6";
-		if( ($this->icmp_socket = @socket_create(AF_INET6, SOCK_RAW, $ip_protocol_code)) === false ) {
-			return(array("status"=>"error",
-				    "msg"=>"Can't create AF_INET6 RAW socket.\n Root permissions requred."));
-		}
-		if($this->srcv6 != "") {
-		    socket_bind($this->icmp_socket,$this->srcv6);
-		    $this->src_addr=$this->srcv6;
-		}
-		/* check our ipv4 ranges here*/
-
-		socket_set_nonblock($this->icmp_socket);
-	    } else {
-		return(array("status"=>"error",
-		    "msg"=>"Строка ".$dst_addr." не содержит ни ipv4 ни ipv6 адрес!"));
-	    }
-
-//	$socket_ttl = socket_get_option($this->socket,$ip_protocol_code,$ip_ttl_code);
-	
-	//for ($a=0; $a<64; $a++)
-	//	echo $a." - ".@socket_get_option($socket,$ip_protocol_code,$a)."\n";
-
-/*	if ($this->ttl > 0) {
-	    socket_set_option($this->icmp_socket,$ip_protocol_code,$ip_ttl_code,128);
-	    $socket_ttl = socket_get_option($this->icmp_socket,$ip_protocol_code,$ip_ttl_code);
-	    //socket_set_option($socket,Socket::IPPROTO_IP,Socket::IP_TTL,128);
-	    //$socket_ttl = socket_get_option($socket,Socket::IPPROTO_IP,Socket::IP_TTL);
-	}
-	else $socket_ttl = 64; // standard TTL
-*/
-	    $this->time="-1";
-	    // lets catch dumb people
-	    if ((int)$timeout <= 0) $timeout=5;
-	    if ((int)$percision <= 0) $percision=3;
-	    $ping_result=array();
-	    $recv_count=$timeout_count=$num_retries=0;
-
-	    /* set socket receive timeout to 1 second */
-	    $sec = intval($timeout/1000);
-	    $usec = $timeout%1000;
-	    // set the timeout
-	    socket_set_option($this->icmp_socket,
-		SOL_SOCKET,  // socket level
-		SO_RCVTIMEO, // timeout option
-		array(
-		    "sec"=>$sec, // Timeout in seconds
-		    "usec"=>$usec  // I assume timeout in microseconds
-		)
-	    );
-
-	    if( (socket_connect($this->icmp_socket, $dst_addr, null)) === false ){
-		return array("status"=>"error",
-		    "msg"=>"Can't connect to $dst_addr: ".socket_strerror(socket_last_error())) ;
-	    }
-
-	    if($packet_size) {
-		$this->packet_data=$strings->generateStrongPassword($packet_size, false,'luds');
-	    } else {
-		$this->packet_data="abcdefghijklmnopqrstuvwabcdefghi";
-	    }
-
-	    $times_timeout=$ping_no="0";
-
-	    $script_startTime = microtime(true); $script_timeout=true;
-	    while( ( $ping_no<$count_pings ) && $script_timeout ) {
-
-		$this->Build_Packet($ping_no,$ip_protocol);
-		$this->start_time();
-		$startTime = microtime(true); // need this for the looping section
-		socket_send($this->icmp_socket, $this->request, $this->request_len,0); // @
-		// Read Data
-		$keepon=true;
-		while( (false===($echo_reply=@socket_read($this->icmp_socket, 255))) && $keepon) { // @socket_read
-		    if ( ( microtime(true) - $startTime ) > $this->timeout )  {
-			$keepon=false;
-			$times_timeout++;
-			if($times_timeout >= $false_timeout) {
-			    if($num_retries=="0") {
-				return array("status"=>"error",
-				    "msg"=>"The host did not respond 20 times in a row. Check host is accessible and firewall for icmp packets"
-				    );
-			    } else {
-				$ping_no++;
-				return array("status"=>"warn",
-					     "msg"=>"test not complete with errors",
-					     "sent"=>$ping_no,
-					     "recv"=>$recv_count,
-					     "ip_proto"=>$ip_protocol,
-					     "src_addr"=>$this->src_addr,
-					     "timeout_count"=>$timeout_count,
-					     "states"=>$ping_result,
-					     "packet_len"=>strlen($this->packet_data),
-				    );
-			    }
-			}
-		    }
-		}
-		
-/*		if(!socket_last_error($this->icmp_socket)) {
-		    return array("status"=>"error",
-		    "msg"=>"Cannot read from  $dst_addr. Reason:".socket_strerror(socket_last_error($this->icmp_socket))."");
-		}*/
-		
-		if($keepon) {
-			if($times_timeout!=0) {
-			    $times_timeout=0;
-			    $num_retries++;
-			    // перенесем время старта пакета
-			    $startTime = microtime(true); // need this for the looping section
-			}
-		    $ping_result[$ping_no]=$this->get_time($percision) * 1000;
-		    $recv_count++;
-		} else {
-		    $ping_result[$ping_no]="-1";
-		    $timeout_count++;
-		}
-//		usleep(1000);
-		$ping_no++;
-		if( (microtime(true) - $script_startTime) > 60 ) { $script_timeout=false; }
-	    }  // while
-
-	    // calculate min/max/avg rtt
-
-	    $indicator_min = $indicator_max = $average = 0;
-	    if($recv_count > 0 ) {
-		$indicator_min = $ping_result[0];
-		$indicator_max = $ping_result[0];
-		foreach($ping_result as $value) {
-		    // calc min in > 0
-		    if($value>=0) {
-			if($indicator_min>$value) $indicator_min=$value;
-			//calc avg
-			$average = $average+$value;
-			// calc max
-			if($indicator_max<$value) $indicator_max=$value;
-		    }
-		}
-		$average = $average/$recv_count;
-	    }
-
-
-
-	    return array(	"status"=>"done",
-				"msg"=>"test complete",
-				"sent"=>$count_pings,
-				"recv"=>$recv_count,
-				"ip_proto"=>$ip_protocol,
-				"src_addr"=>$this->src_addr,
-				"timeout_count"=>$timeout_count,
-				"states"=>$ping_result,
-				"min_delay"=>sprintf("%.3F",$indicator_min),
-				"max_delay"=>sprintf("%.3F",$indicator_max),
-				"avg_delay"=>sprintf("%.3F",$average),
-				"packet_len"=>strlen($this->packet_data),
-		);
-	}
-	/* like min(), but casts to int and ignores 0 */
-	function min_not_null(Array $values) {
-	    return min(array_diff(array_map("intval",$values), array(0)));
-	}
-
-	function FloodPing($dst_addr, $count_pings="1000",$packet_size="1472") {
-	    $result = $this->ping($count_pings,trim($dst_addr),100,6,$packet_size);
-	    return($result);
-	}
-
-} // end class Net_Ping
-
-
-// start here
-
+/* Проверка на валидность наших IP адресов */
 include("check_ip_range.php");
+include("net_ping.class.php");
+
 $ip_range=new check_ip_range;
 
 $script_start=$script_end="0";
@@ -334,22 +73,24 @@ if(isset($_GET["pktlen"]) && ($_GET["pktlen"])) {
 if( $pkt_len>"1472") $pkt_len="1472";
 if( $pkt_len<"2") $pkt_len="2";
 
-
-
-if(isset($_GET["host"])&& ($_GET["host"])) {
+if(isset($_GET["host"]) && ($_GET["host"])) {
     $ip_addr=$_GET["host"];
-
-    /* Check ip */
+    /* Проверка на валидность наших IP адресов */
     $ip_result=$ip_range->check_in_range($ip_addr);
     if($ip_result["status"]=="free") {
-	$result=array("status"=>"error","msg"=>"Making FLOOD PING out of ours ranges STRONGLY PROHIBITED!!!");
+	$result=array("status"=>"error","msg"=>"Делать FLOOD PING вне разрешенных IP адресов ЗАПРЕЩЕНО!");
     } else {
 	//  ip_result == overlap
-	$ping = new Net_Ping;
-	$result=$ping->FloodPing($ip_addr,"1000",$pkt_len);
+	$ping = new net_ping;
+	$result = $ping->stdPing( $ip_addr, "3", "100" );
+	if( ($result["sent"]!="0" ) && ( $result["recv"]=="0") ) {
+	    $result=array("status"=>"error","msg"=>"Опрашиваемый адрес не отвечает. \nВозможно, включен фаервол или нет связи с устройством");
+	} else {
+	    $result = $ping->FloodPing($ip_addr,"1000",$pkt_len);
+	}
     }
 } else {
-    $result=array("status"=>"error","msg"=>"host argument missing");
+    $result=array("status"=>"error","msg"=>"В скрипт не передан адрес опрашиваемого устройства");
 }
 
 $script_end = microtime(true);
@@ -375,16 +116,31 @@ $img=imagecreate($img_width,$img_height);
 
 
 # -------  Define Colors ----------------
+//$bar_color=imagecolorallocate($img,0,64,128);
 $bar_color=imagecolorallocate($img,70,130,180);
 $vertical_values_color=imagecolorallocate($img,0,0,0);
-$background_color=imagecolorallocate($img,200,200,200);
+$background_color=imagecolorallocate($img,208,208,208);
 $result_color=imagecolorallocate($img,143,188,143);
+//$background_color=imagecolorallocate($img,240,240,255);
+//$border_color=imagecolorallocate($img,46,139,87);
 $border_color=imagecolorallocate($img,173,216,230);
 $line_color=imagecolorallocate($img,120,120,120);
 $error_color=imagecolorallocate($img,255,0,0);
 $percent_color=imagecolorallocate($img,220,0,0);
 $normaltext_color=imagecolorallocate($img,0,0,139);
 $point_color=imagecolorallocate($img,0,0,128);
+$black_color=imagecolorallocate($img,0,0,64);
+
+#$black_color=imagecolorallocate($img,255,69,0);
+#$bar_color=imagecolorallocate($img,240,230,140);
+
+
+#$background_color=imagecolorallocate($img,0,0,0);
+#$black_color=imagecolorallocate($img,0,192,0);
+#$bar_color=imagecolorallocate($img,0,128,0,50);
+
+
+
 # ------ Create the border around the graph ------
 $font = './arial.ttf';
 
@@ -428,7 +184,7 @@ if($result["status"]=="error") {
 	$prev_x=$prev_y="";
 
 	reset($values);
-	// FIRST DRAW ALL "POSITIVES PINGS"
+	// сначала отрисуем все "позитивные пинги"
 	for($i=0;$i< $total_bars; $i++){
 	    //# ------ Extract key and value pair from the current pointer position
 	    list($key,$value)=each($values);
@@ -441,19 +197,19 @@ if($result["status"]=="error") {
 		if($prev_x=="") {$prev_x=$x1+1;}
 		if($prev_y=="") {$prev_y=$y1+1;}
 		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$bar_color);
-		// FAT POINTS on graph 
+		// Жирные Точечки над графиком
 		//imagefilledrectangle($img,$x1-1,$y1-1,$x1+2,$y1+2,$point_color);
-		//imageline($img,$x1,$y1,$prev_x,$prev_y,$bar_color);
+		imageline($img,$x1,$y1,$prev_x,$prev_y,$black_color);
 		//imagesetpixel($img,$x1,$y1,$point_color);
-		//$prev_x=$x1;
-		//$prev_y=$y1;
+		$prev_x=$x1;
+		$prev_y=$y1;
 	    }
 
 	}
 	
 	reset($values);
 
-	// draw timeout  pings as red lines 
+	// негативные отрисуем пожирнее.т.к. с мобилки их надо увидеть "не напрягаясь"
 	for($i=0;$i < $total_bars; $i++){
 	    //# ------ Extract key and value pair from the current pointer position
 	    list($key,$value)=each($values);
@@ -473,8 +229,6 @@ if($result["status"]=="error") {
 	$lost_txt=sprintf("%4.3F",$lost);
 
 
-/*	// at your flavours
-
 	$ipaddr_len=strlen($ip_addr);
 	if($ipaddr_len<"16") $ipaddr_len="16";
 	
@@ -485,7 +239,7 @@ if($result["status"]=="error") {
 	}
 	$box_offset=$ipaddr_len*10+80;
 	$ypos=$margin_top+17;
-	$info_y=20*6+4;
+	$info_y=20*5+4;
 	$text_x=$img_width-$margin_right-$box_offset+10;
 
 	imagefilledrectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
@@ -498,10 +252,10 @@ if($result["status"]=="error") {
 	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
 	$text="Packet size: ".sprintf("%6d",$result["packet_len"])." bytes";
 	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
-	$text="Packets SENT:".sprintf("%6d",$result["sent"])."";
+	$text="Packets SENT / RECV: ".sprintf("%d",$result["sent"])." / ".sprintf("%d",$result["recv"]);
 	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
-	$text="Packets RECV:".sprintf("%6d",$result["recv"])."";
-	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
+//	$text="Packets RECV:".."";
+//	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
 	$text="Packets LOST:";
 	imagettftext($img,9,0,$text_x,$ypos,$normaltext_color,$font,$text);
 	$text=$lost_txt;
@@ -516,20 +270,25 @@ if($result["status"]=="error") {
 	imagettftext($img,9,0,$text_x , $ypos,$normaltext_color,$font,$text); $ypos+=19;
 
 
-	$text  = "LOST: ".$lost_txt."%    ";
-	$text .= "SEND ".$result["sent"].", ";
-	$text .= "RECV ".$result["recv"]." ";
-	$text .= "packets lenght ".$result["packet_len"]." bytes ";
+	$text  = "Потери: ".$lost_txt."%    ";
+	$text .= "Отправлено ".$result["sent"].", ";
+	$text .= "принято ".$result["recv"]." ";
+	$text .= "пакетов длиной по ".$result["packet_len"]." байт(а) ";
 	$text .= "min / max / avg delay, ms: ".$result["min_delay"]. " / " .$result["max_delay"]. " / ".$result["avg_delay"];
 
-	$bbox = imagettfbbox(10, 0, $font, $text);
-	imagettftext($img, 10, 0, $margin_left, $img_height - $margin_bottom - $bbox[5]+6,$normaltext_color, $font, $text);
-*/
 
-	// title
-	$text="Test flood pings ";
+	$bbox = imagettfbbox(10, 0, $font, $text);
+	// Пишем текст
+	imagettftext($img, 10, 0, $margin_left, $img_height - $margin_bottom - $bbox[5]+6,$normaltext_color, $font, $text);
+	// Для стандартного английского шрифта
+	// imagestring($img,5,$margin_left+10,$img_height - $margin_bottom+4,$text,$normaltext_color);
+
+
+
+	// Шапка
+	$text="Тестируем флудным пингом ";
 	if($result["src_addr"]!="") {
-	    $text.="ftom ".$result["src_addr"]." to ";
+	    $text.="с ".$result["src_addr"]." <=> ";
 	} else {
 	    $text.="";
 	}
@@ -540,12 +299,13 @@ if($result["status"]=="error") {
 	$x = $bbox[0] + (imagesx($img) / 2) - ($bbox[4] / 2) - 25;
 	$y = $bbox[1] + (imagesy($img) / 2) - ($bbox[5] / 2) - 5;
 	imagettftext($img, 13, 0, $x, 20,$normaltext_color, $font, $text);
+	//imagettftext($img, $graph_width-15,$graph_height-10, 15, 10, $normaltext_color, $font, $total_time);
 	
-	$tot_time="script working ".$total_time." sec";
+	$tot_time="скрипт работал ".$total_time." сек";
 	$bbox = imagettfbbox(10, 0, $font, $tot_time);
 	imagettftext($img, 10,0, $img_width-$margin_right-$bbox[4], $img_height - $margin_bottom - $bbox[5]+8, $normaltext_color, $font, $tot_time);
 
-	//$copyright="(C)umka@localka.net";
+	//$copyright=" umka@localka.net";
 	//$bbox = imagettfbbox(10, 0, $font, $copyright);
 	//imagettftext($img, 10,90, $img_width-$margin_right/2+5, $img_height-$bbox[5]-100, $normaltext_color, $font, $copyright);
     }
