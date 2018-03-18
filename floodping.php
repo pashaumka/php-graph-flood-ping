@@ -26,6 +26,9 @@
         location /billing_tools {
                 root /путь/к/скрипту/;
                 index index.php index.html index.htm;
+		allow a.x.c.v/32;
+		deny all;
+                        
                 location ~ ^/billing_tools/(.+\.php)$ {
                         #try_files      $uri =404;
                         root            /путь/к/скрипту/;
@@ -48,8 +51,6 @@
         group=root
         listen=127.0.0.1:3031;   // к примеру
 */
-
-include("/stat/web/Global_settings.php");
 
 
 /* Проверка на валидность наших IP адресов */
