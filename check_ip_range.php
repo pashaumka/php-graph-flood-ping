@@ -7,9 +7,9 @@ class check_ip_range {
 
 	function __construct() {
 	    $ip_blocks=ip_blocks::getInstance();
-	    // our networks ranges.... ipv4 and ipv6 in mix :)
-	    $my_range="10.56.0.0/16, fc80:0000:0001::/48";
-	    $my_range.=", 10.28.0.0/24, 10.2.0.0/24, 172.16.0.0/20";
+	    // our networks ranges.... ipv4 and ipv6 in mix ;)
+	    $my_range = "10.56.0.0/16, fc80:0000:0001::/48";
+	    $my_range.= ", 10.28.0.0/24, 10.2.0.0/24, 172.16.0.0/20";
 	    $my_range=str_replace(" ","",$my_range);
 	    $my_range=str_replace(",",";",$my_range);
 	    $a=explode(";",$my_range);

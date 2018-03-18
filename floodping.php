@@ -1,7 +1,8 @@
 <?php
+#
 #  umka@localka.net  skype: pashaumka
 #
-#  floodping.class.php version 0.2 beta
+#  floodping.class.php version 0.3 beta @  18-03-2018
 #  скрипт работает как с ipv4, так и с ipv6 адресами
 #
 #  для запуска скрипта необходимо запустить php5-fpm с правами root
@@ -14,15 +15,10 @@
 #  кому надо &pktlen=1472
 #
 #  надо допилить
-#  * парсинг адресов (в4 и в6) и обработку try_catch
-#  * вывод сообщений на русском
-#  * rtt
-#  * учет ttl - мы же не собираемся мир ддосить.. а только хосты абонов внутри сети.
-#
-#  в скрипте нет блокировки на диапазоны "не своих" IP адресов, это в плане допила
+#   * графику
 #
 /*
-        скрипт  кладем в /путь/к/скрипту/billing_tools/
+    скрипт  кладем в /путь/к/скрипту/billing_tools/
 
     в nginx:
 
@@ -34,7 +30,7 @@
                         #try_files      $uri =404;
                         root            /путь/к/скрипту/;
                         #fastcgi_pass   php-fpm;
-                        fastcgi_pass    127.0.0.1:9032;
+                        fastcgi_pass    127.0.0.1:3031;
                         fastcgi_index   index.php;
                         fastcgi_param   SCRIPT_FILENAME $request_filename;
                         include         /etc/nginx/fastcgi_params;
@@ -50,7 +46,7 @@
     в php-fpm в пуле создаем пул с правами рута
         user=root
         group=root
-        listen=127.0.0.1:9032;   // к примеру
+        listen=127.0.0.1:3031;   // к примеру
 */
 
 include("/stat/web/Global_settings.php");
@@ -82,12 +78,16 @@ if(isset($_GET["host"]) && ($_GET["host"])) {
     } else {
 	//  ip_result == overlap
 	$ping = new net_ping;
+	$ping -> set_ipv4_addr("192.168.0.1");			//  <--  поменять на свои
+	$ping -> set_ipv6_addr("2001:1ffc:2ac4::2000:1");	//  <--  поменять на свои
 	$result = $ping->stdPing( $ip_addr, "3", "100" );
-	if( ($result["sent"]!="0" ) && ( $result["recv"]=="0") ) {
-	    $result=array("status"=>"error","msg"=>"Опрашиваемый адрес не отвечает. \nВозможно, включен фаервол или нет связи с устройством");
-	} else {
+	if($result["status"]=="done") {
+	    if( ($result["sent"]!="0" ) && ( $result["recv"]=="0") ) {
+		$result=array("status"=>"error","msg"=>"Опрашиваемый адрес ( ".$ip_addr." ) не отвечает. \nВозможно, включен фаервол или нет связи с устройством");
+	    }
 	    $result = $ping->FloodPing($ip_addr,"1000",$pkt_len);
 	}
+
     }
 } else {
     $result=array("status"=>"error","msg"=>"В скрипт не передан адрес опрашиваемого устройства");
@@ -126,6 +126,11 @@ $result_color=imagecolorallocate($img,143,188,143);
 $border_color=imagecolorallocate($img,173,216,230);
 $line_color=imagecolorallocate($img,120,120,120);
 $error_color=imagecolorallocate($img,255,0,0);
+$error_color1=imagecolorallocate($img,240,0,0);
+$error_color2=imagecolorallocate($img,255,69,0);
+$error_color3=imagecolorallocate($img,255,0,0);
+$error_color4=imagecolorallocate($img,139,0,0);
+$error_color5=imagecolorallocate($img,255,0,0);
 $percent_color=imagecolorallocate($img,220,0,0);
 $normaltext_color=imagecolorallocate($img,0,0,139);
 $point_color=imagecolorallocate($img,0,0,128);
@@ -177,8 +182,10 @@ if($result["status"]=="error") {
 	for($i=1;$i<=$horizontal_lines;$i++){
 	    $y=$img_height - $margin_bottom - $horizontal_gap * $i ;
 	    imageline($img,$margin_left,$y,$img_width-$margin_right,$y,$line_color);
-	    $v=sprintf("%03.3F",$horizontal_gap * $i / $ratio);
-	    imagestring($img,5,20,$y-5,$v,$vertical_values_color);
+	    $v=sprintf("%.3F",$horizontal_gap * $i / $ratio);
+	    //imagestring($img,5,20,$y-5,$v,$vertical_values_color);
+	    $bbox = imagettfbbox(12, 0, $font, $v);
+	    imagettftext($img, 12, 0, $margin_left-10-$bbox[4], $y+5+round($bbox[3]/2), $vertical_values_color, $font, $v);
 	}
 	//# ----------- Draw the bars here ------
 	$prev_x=$prev_y="";
@@ -213,13 +220,20 @@ if($result["status"]=="error") {
 	for($i=0;$i < $total_bars; $i++){
 	    //# ------ Extract key and value pair from the current pointer position
 	    list($key,$value)=each($values);
-	    if($value=="-1") {
-		$x1= $margin_left + $gap + $i * ($gap+$bar_width) ;
-		$x2= $x1 + $bar_width;
-		$y1= $margin_top+$graph_height- intval($max_value * $ratio) ;
-		$y2= $img_height-$margin_bottom;
-		imagefilledrectangle($img,$x1,$y1,$x2+1,$y2,$error_color);
-	    } else {
+	    $x1= $margin_left + $gap + $i * ($gap+$bar_width) ;
+	    $x2= $x1 + $bar_width+1;
+	    $y1= $margin_top+$graph_height- intval($max_value * $ratio)+1 ;
+	    $y2= $img_height-$margin_bottom-1;
+	    if($value == "-1") {
+		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$error_color1);
+	    } elseif($value == "-2") {
+		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$error_color2);
+	    } elseif($value == "-3") {
+		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$error_color3);
+	    } elseif($value == "-4") {
+		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$error_color4);
+	    } elseif($value == "-5") {
+		imagefilledrectangle($img,$x1,$y1,$x2,$y2,$error_color5);
 	    }
 	}
 
@@ -242,7 +256,41 @@ if($result["status"]=="error") {
 	$info_y=20*5+4;
 	$text_x=$img_width-$margin_right-$box_offset+10;
 
-	imagefilledrectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
+
+	
+	$box_info_len=strlen($text);
+
+	$imginfo=imagecreate($text_x,$info_y);
+	//imagesavealpha($imginfo, true);
+
+	imagefilledrectangle($imginfo,0,$text_x,
+				0,$info_y,$result_color);
+	imagerectangle($imginfo,0,$text_x,0,$info_y,$normaltext_color);
+	imagerectangle($imginfo,1,$text_x-1,1,$info_y-1,$normaltext_color);
+/*	imagettftext($imginfo,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
+	$text="Packet size: ".sprintf("%6d",$result["packet_len"])." bytes";
+	imagettftext($imginfo,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
+	$text="Packets SENT / RECV: ".sprintf("%d",$result["sent"])." / ".sprintf("%d",$result["recv"]);
+	imagettftext($imginfo,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
+//	$text="Packets RECV:".."";
+//	imagettftext($imginfo,9,0,$text_x,$ypos,$normaltext_color,$font,$text);$ypos+=19;
+	$text="Packets LOST:";
+	imagettftext($imginfo,9,0,$text_x,$ypos,$normaltext_color,$font,$text);
+	$text=$lost_txt;
+	if($lost>"2.5") {
+	    imagettftext($imginfo,9,0,$text_x+130,$ypos,$percent_color,$font,$text);
+	} else {
+	    imagettftext($imginfo,9,0,$text_x+130,$ypos,$normaltext_color,$font,$text);
+	}
+	$text=" %";
+	imagettftext($imginfo,9,0,$text_x+160,$ypos,$normaltext_color,$font,$text); $ypos+=19;
+	$text="min / max / avg: ".$result["min_delay"]. " / " .$result["max_delay"]. " / ".$result["avg_delay"];
+	imagettftext($imginfo,9,0,$text_x , $ypos,$normaltext_color,$font,$text); $ypos+=19;
+*/
+
+
+
+/*	imagefilledrectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
 				$img_width-$margin_right-2,$margin_top+$info_y+4,$result_color);
 
 	imagerectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
@@ -268,7 +316,7 @@ if($result["status"]=="error") {
 	imagettftext($img,9,0,$text_x+160,$ypos,$normaltext_color,$font,$text); $ypos+=19;
 	$text="min / max / avg: ".$result["min_delay"]. " / " .$result["max_delay"]. " / ".$result["avg_delay"];
 	imagettftext($img,9,0,$text_x , $ypos,$normaltext_color,$font,$text); $ypos+=19;
-
+*/
 
 	$text  = "Потери: ".$lost_txt."%    ";
 	$text .= "Отправлено ".$result["sent"].", ";
@@ -276,6 +324,68 @@ if($result["status"]=="error") {
 	$text .= "пакетов длиной по ".$result["packet_len"]." байт(а) ";
 	$text .= "min / max / avg delay, ms: ".$result["min_delay"]. " / " .$result["max_delay"]. " / ".$result["avg_delay"];
 
+
+/*	$ipaddr_len=strlen($ip_addr);
+	if($ipaddr_len<"16") $ipaddr_len="16";
+	
+	if($result["ip_proto"]=="ipv6") {
+	    $text="IPv6 ADDR: ".$ip_addr."";
+	} elseif($result["ip_proto"]=="ipv4") {
+	    $text="IPv4 ADDR: ".$ip_addr."";
+	}
+	$box_offset=$ipaddr_len*10+80;
+	$ypos=$margin_top+7;
+	$info_y=20*5+4;
+	$text_x=$img_width-$margin_right-$box_offset+5;
+
+	imagefilledrectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
+				$img_width-$margin_right-2,$margin_top+$info_y+4,$result_color);
+
+	imagerectangle($img,$img_width-$margin_right-$box_offset-10,$margin_top,
+				$img_width-$margin_right,$margin_top+$info_y+5,$normaltext_color);
+	imagerectangle($img,$img_width-$margin_right-$box_offset-9,$margin_top+1,
+				$img_width-$margin_right-1,$margin_top+$info_y+4,$normaltext_color);
+	imagestring($img,5,$text_x,$ypos,$text,$normaltext_color);$ypos+=20;
+	$text="Packet size: ".sprintf("%6d",$result["packet_len"])." bytes";
+	imagestring($img,5,$text_x,$ypos,$text,$normaltext_color);$ypos+=20;
+	$text="Packets SENT:".sprintf("%6d",$result["sent"])."";
+	imagestring($img,5,$text_x,$ypos,$text,$normaltext_color);$ypos+=20;
+	$text="Packets RECV:".sprintf("%6d",$result["recv"])."";
+	imagestring($img,5,$text_x,$ypos,$text,$normaltext_color);$ypos+=20;
+	$text="Packets LOST:";
+	imagestring($img,5,$text_x,$ypos,$text,$normaltext_color);
+	if($lost>"2.5") {
+	    imagestring($img,5,$text_x+130,$ypos,$text,$percent_color);
+	} else {
+	    imagestring($img,5,$text_x+130,$ypos,$text,$normaltext_color);
+	}
+	$text=" %";
+	imagestring($img,5,$text_x+180,$ypos,$text,$normaltext_color);
+	
+	$ypos+=20;*/
+
+
+
+
+/*	$text="Потери: ".$lost_txt."%    ";
+	$text.="Отправлено ".$result["sent"].", ";
+	$text.="принято ".$result["recv"]." ";
+	$text.="пакетов длиной по ".$result["packet_len"]." байт(а) ";
+*/	
+
+
+
+/*	$_end_time = explode (" ", $script_end);
+	// format start time
+	$_start_time = explode (" ", $scpirt_start);
+	$_start_time = $_start_time[1] + $_start_time[0];
+	// get and format end time
+	$_end_time = $_end_time[1] + $_end_time[0];
+	$_exec_time= number_format ($_end_time - $_start_time, 8);
+	$exec_time=sprintf("%04.4f", $_exec_time*1000);
+*/
+
+	//$text.=" script exec: $exec_time msec";
 
 	$bbox = imagettfbbox(10, 0, $font, $text);
 	// Пишем текст
@@ -305,7 +415,9 @@ if($result["status"]=="error") {
 	$bbox = imagettfbbox(10, 0, $font, $tot_time);
 	imagettftext($img, 10,0, $img_width-$margin_right-$bbox[4], $img_height - $margin_bottom - $bbox[5]+8, $normaltext_color, $font, $tot_time);
 
-	//$copyright=" umka@localka.net";
+	//imagecopy($img,$imginfo,5, 5, 0, 0, imagesx($imginfo), imagesy($imginfo));
+
+	//$copyright="(C) umka@localka.net";
 	//$bbox = imagettfbbox(10, 0, $font, $copyright);
 	//imagettftext($img, 10,90, $img_width-$margin_right/2+5, $img_height-$bbox[5]-100, $normaltext_color, $font, $copyright);
     }
