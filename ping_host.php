@@ -18,10 +18,8 @@
 	if( $pkt_len<"2") $pkt_len="2";
     }
 
-    include("/stat/web/Global_settings.php");
-
     /* Проверка на валидность наших IP адресов */
-    include("check_ip_range.php");
+    include("check_ip_range.class.php");
     include("net_ping.class.php");
 
     $ip_range=new check_ip_range;
