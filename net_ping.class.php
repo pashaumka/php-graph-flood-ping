@@ -304,10 +304,12 @@ class net_ping {
 		    // ищем свободный сокет
 		    $num = 0;
 		    $timeout = 0;
+		    $socket_sets = array(self::$icmp_socket);
 		    while (($num <= 0) and ($timeout < 100))  {
-			$set = array(self::$icmp_socket);
-			$num = socket_select($set, $s_write = NULL, $s_accept = NULL, 0, 1000);
-			if ($num === false) {
+			$write = NULL;
+			$except = NULL;
+			if ( false === ( $num = @socket_select($socket_sets, $write, $except, $sock_sec, $sock_usec))) {
+			    // error
 			}
 			$timeout++;
 		    }
@@ -380,6 +382,11 @@ class net_ping {
 
 	    $status="done"; $msg="test complete";
 
+	    if( (@socket_close(self::$icmp_socket) ) ) {
+		//	return(array("status"=>"error",
+		//		    "msg"=>"Не могу закрыть сокет?")) ;
+	    }
+
 	    return 	array(	"status"=>$status,
 				"msg"=>$msg,
 				"states"=>$ping_result,
@@ -399,13 +406,11 @@ class net_ping {
 	}
 
 	public function stdPing($dst_addr, $count_pings="5", $packet_size="10") {
-	    $result = self::ping(trim($dst_addr), $count_pings, $packet_size, 1500, 1000);
-	    return($result);
+	    return( self::ping(trim($dst_addr), $count_pings, $packet_size, 1500, 1000) );
 	}
 
 	public function FloodPing($dst_addr, $count_pings="1000",$packet_size="1472") {
-	    $result = self::ping(trim($dst_addr), $count_pings, $packet_size, 50, 2);
-	    return($result);
+	    return( self::ping(trim($dst_addr), $count_pings, $packet_size, 50, 2) );
 	}
 
 } // end class Net_Ping
