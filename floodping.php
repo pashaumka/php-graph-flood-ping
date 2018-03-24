@@ -323,8 +323,7 @@ if($result["status"]=="error") {
 	$text .= "Отправлено ".$result["sent"].", ";
 	$text .= "принято ".$result["recv"]." ";
 	$text .= "пакетов длиной по ".$result["packet_len"]." байт(а) ";
-	$text .= "min / max / avg delay, ms: ".$result["min_delay"]. " / " .$result["max_delay"]. " / ".$result["avg_delay"];
-
+	$text .= "Задержки, ms:  мин:".$result["min_delay"]. ", макс:" .$result["max_delay"]. ", средн:".$result["avg_delay"];
 
 /*	$ipaddr_len=strlen($ip_addr);
 	if($ipaddr_len<"16") $ipaddr_len="16";
